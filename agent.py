@@ -88,20 +88,22 @@ class DataLoader:
         Load Excel file with automatic sheet detection and metadata extraction
         """
         try:
-            # Read Excel file and get all sheets
+            # Read Excel file and inspect sheets
             excel_file = pd.ExcelFile(file_path)
             sheets_info = {}
-            
-            # Analyze each sheet
+            sheet_rows = {}
+
+            # Analyze each sheet and record row counts
             for sheet_name in excel_file.sheet_names:
-                df_temp = pd.read_excel(file_path, sheet_name=sheet_name, nrows=5)
+                df_temp = pd.read_excel(file_path, sheet_name=sheet_name)
+                sheet_rows[sheet_name] = len(df_temp)
                 sheets_info[sheet_name] = {
                     'columns': list(df_temp.columns),
                     'sample_data': df_temp.head(2).to_dict('records')
                 }
-            
-            # Load the main sheet (usually the first one or largest)
-            main_sheet = excel_file.sheet_names[0]
+
+            # Choose the sheet with the most rows as the main sheet
+            main_sheet = max(sheet_rows, key=sheet_rows.get)
             df = pd.read_excel(file_path, sheet_name=main_sheet)
             
             # Extract metadata
@@ -170,20 +172,31 @@ class AuditAnalyzer:
         Comprehensive duplicate detection analysis
         """
         try:
+            total_records = len(df)
+            if total_records == 0:
+                return {
+                    'full_duplicates': 0,
+                    'partial_duplicates': 0,
+                    'duplicate_percentage': 0,
+                    'risk_level': 'LOW',
+                    'total_records': 0,
+                    'analysis_summary': 'No records to analyze'
+                }
+
             # Full row duplicates
             full_duplicates = df.duplicated().sum()
-            
+
             # Partial duplicates (excluding ID columns)
             id_columns = [col for col in df.columns if 'id' in col.lower() or 'key' in col.lower()]
             non_id_columns = [col for col in df.columns if col not in id_columns]
-            
+
             if non_id_columns:
                 partial_duplicates = df[non_id_columns].duplicated().sum()
             else:
                 partial_duplicates = 0
-            
+
             # Duplicate percentage
-            duplicate_percentage = (full_duplicates / len(df)) * 100
+            duplicate_percentage = (full_duplicates / total_records) * 100
             
             # Risk assessment
             risk_level = "HIGH" if duplicate_percentage > 5 else "MEDIUM" if duplicate_percentage > 1 else "LOW"
@@ -207,6 +220,15 @@ class AuditAnalyzer:
         try:
             # Convert to numeric and sort
             numeric_values = pd.to_numeric(df[sequence_column], errors='coerce').dropna().sort_values()
+            if numeric_values.empty:
+                return {
+                    'missing_sequences': [],
+                    'total_gaps': 0,
+                    'gap_percentage': 0,
+                    'risk_level': 'LOW',
+                    'sequence_range': 'N/A',
+                    'analysis_summary': 'No numeric sequence data'
+                }
             
             # Find gaps
             gaps = []
@@ -217,7 +239,8 @@ class AuditAnalyzer:
                     gaps.extend(range(int(previous + 1), int(current)))
             
             # Risk assessment
-            gap_percentage = (len(gaps) / (numeric_values.max() - numeric_values.min())) * 100
+            range_span = numeric_values.max() - numeric_values.min()
+            gap_percentage = (len(gaps) / range_span) * 100 if range_span else 0
             risk_level = "HIGH" if gap_percentage > 5 else "MEDIUM" if gap_percentage > 1 else "LOW"
             
             return {
@@ -326,8 +349,8 @@ def analyze_data_node(state: AnalysisState) -> AnalysisState:
             # Find numeric columns for Benford's Law
             numeric_columns = df.select_dtypes(include=[np.number]).columns
             if len(numeric_columns) > 0:
-                # Use the first numeric column or largest values column
-                target_column = numeric_columns[0]
+                # Choose column with highest variance for better detection
+                target_column = df[numeric_columns].var().idxmax()
                 benford_results = analyzer.benford_law_analysis(df, target_column)
                 state['results']['benford_analysis'] = benford_results
             

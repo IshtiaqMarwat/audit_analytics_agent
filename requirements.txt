@@ -1,0 +1,10 @@
+langchain
+langchain-openai
+langchain-experimental
+langgraph
+pyyaml
+pandas
+numpy
+plotly
+seaborn
+matplotlib
