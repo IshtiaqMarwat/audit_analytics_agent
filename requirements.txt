@@ -8,3 +8,8 @@ numpy
 plotly
 seaborn
 matplotlib
+pandas
+numpy
+openpyxl
+tabulate
+

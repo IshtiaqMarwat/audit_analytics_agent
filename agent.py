@@ -10,8 +10,8 @@
 from langchain_openai import ChatOpenAI
 from langchain_experimental.agents.agent_toolkits import create_pandas_dataframe_agent
 from langchain.agents.agent_types import AgentType
-from langgraph.graph import Graph, StateGraph, END
-from langgraph.prebuilt import ToolExecutor
+from langgraph.graph import StateGraph, END
+# Removed ToolExecutor import as it's not needed for this workflow
 from typing import TypedDict, List, Dict, Any, Optional
 import os
 from pathlib import Path
@@ -114,7 +114,7 @@ class DataLoader:
                 'total_rows': len(df),
                 'total_columns': len(df.columns),
                 'columns': list(df.columns),
-                'data_types': df.dtypes.to_dict(),
+                'data_types': {str(k): str(v) for k, v in df.dtypes.to_dict().items()},
                 'missing_data_summary': df.isnull().sum().to_dict(),
                 'sheets_info': sheets_info
             }
@@ -140,6 +140,12 @@ class AuditAnalyzer:
             first_digits = first_digits[first_digits.str.isdigit()].astype(int)
             first_digits = first_digits[first_digits != 0]
             
+            if len(first_digits) == 0:
+                return {
+                    'error': 'No valid digits found for Benford analysis',
+                    'risk_level': 'LOW'
+                }
+            
             # Calculate observed frequencies
             observed_freq = first_digits.value_counts().sort_index()
             observed_freq = observed_freq / observed_freq.sum()
@@ -164,7 +170,7 @@ class AuditAnalyzer:
                 'analysis_summary': f"Benford's Law analysis shows {risk_level} risk of manipulation"
             }
         except Exception as e:
-            return {'error': f"Benford analysis failed: {str(e)}"}
+            return {'error': f"Benford analysis failed: {str(e)}", 'risk_level': 'LOW'}
     
     @staticmethod
     def detect_duplicates(df: pd.DataFrame) -> Dict[str, Any]:
@@ -210,7 +216,7 @@ class AuditAnalyzer:
                 'analysis_summary': f"Found {full_duplicates} duplicate records ({duplicate_percentage:.2f}%)"
             }
         except Exception as e:
-            return {'error': f"Duplicate detection failed: {str(e)}"}
+            return {'error': f"Duplicate detection failed: {str(e)}", 'risk_level': 'LOW'}
     
     @staticmethod
     def gap_analysis(df: pd.DataFrame, sequence_column: str) -> Dict[str, Any]:
@@ -252,7 +258,7 @@ class AuditAnalyzer:
                 'analysis_summary': f"Found {len(gaps)} gaps in sequence ({gap_percentage:.2f}%)"
             }
         except Exception as e:
-            return {'error': f"Gap analysis failed: {str(e)}"}
+            return {'error': f"Gap analysis failed: {str(e)}", 'risk_level': 'LOW'}
 
 class VisualizationEngine:
     """Enhanced visualization engine for audit reports"""
@@ -264,49 +270,56 @@ class VisualizationEngine:
         """
         figures = []
         
-        # 1. Data Quality Overview
-        fig1 = make_subplots(
-            rows=2, cols=2,
-            subplot_titles=('Missing Data by Column', 'Data Types Distribution', 
-                          'Record Count Trend', 'Duplicate Analysis'),
-            specs=[[{"type": "bar"}, {"type": "pie"}],
-                   [{"type": "scatter"}, {"type": "bar"}]]
-        )
-        
-        # Missing data
-        missing_data = df.isnull().sum()
-        fig1.add_trace(
-            go.Bar(x=missing_data.index, y=missing_data.values, name="Missing Data"),
-            row=1, col=1
-        )
-        
-        # Data types
-        dtype_counts = df.dtypes.value_counts()
-        fig1.add_trace(
-            go.Pie(labels=dtype_counts.index.astype(str), values=dtype_counts.values, name="Data Types"),
-            row=1, col=2
-        )
-        
-        fig1.update_layout(title_text="Data Quality Dashboard", showlegend=False)
-        figures.append(fig1)
-        
-        # 2. Benford's Law Analysis (if available)
-        if 'benford_analysis' in analysis_results:
-            benford_data = analysis_results['benford_analysis']
-            if 'observed_frequencies' in benford_data:
-                fig2 = go.Figure()
-                digits = list(range(1, 10))
-                observed = [benford_data['observed_frequencies'].get(i, 0) for i in digits]
-                expected = [benford_data['expected_frequencies'].get(i, 0) for i in digits]
-                
-                fig2.add_trace(go.Bar(x=digits, y=observed, name="Observed", opacity=0.7))
-                fig2.add_trace(go.Bar(x=digits, y=expected, name="Expected (Benford's Law)", opacity=0.7))
-                fig2.update_layout(
-                    title=f"Benford's Law Analysis - Risk Level: {benford_data.get('risk_level', 'Unknown')}",
-                    xaxis_title="First Digit",
-                    yaxis_title="Frequency"
+        try:
+            # 1. Data Quality Overview
+            fig1 = make_subplots(
+                rows=2, cols=2,
+                subplot_titles=('Missing Data by Column', 'Data Types Distribution', 
+                              'Record Count Summary', 'Duplicate Analysis'),
+                specs=[[{"type": "bar"}, {"type": "pie"}],
+                       [{"type": "bar"}, {"type": "bar"}]]
+            )
+            
+            # Missing data
+            missing_data = df.isnull().sum()
+            if len(missing_data) > 0:
+                fig1.add_trace(
+                    go.Bar(x=missing_data.index[:10], y=missing_data.values[:10], name="Missing Data"),
+                    row=1, col=1
                 )
-                figures.append(fig2)
+            
+            # Data types
+            dtype_counts = df.dtypes.value_counts()
+            if len(dtype_counts) > 0:
+                fig1.add_trace(
+                    go.Pie(labels=[str(x) for x in dtype_counts.index], 
+                          values=dtype_counts.values, name="Data Types"),
+                    row=1, col=2
+                )
+            
+            fig1.update_layout(title_text="Data Quality Dashboard", showlegend=False, height=600)
+            figures.append(fig1)
+            
+            # 2. Benford's Law Analysis (if available)
+            if 'benford_analysis' in analysis_results:
+                benford_data = analysis_results['benford_analysis']
+                if 'observed_frequencies' in benford_data and 'expected_frequencies' in benford_data:
+                    fig2 = go.Figure()
+                    digits = list(range(1, 10))
+                    observed = [benford_data['observed_frequencies'].get(i, 0) for i in digits]
+                    expected = [benford_data['expected_frequencies'].get(i, 0) for i in digits]
+                    
+                    fig2.add_trace(go.Bar(x=digits, y=observed, name="Observed", opacity=0.7))
+                    fig2.add_trace(go.Bar(x=digits, y=expected, name="Expected (Benford's Law)", opacity=0.7))
+                    fig2.update_layout(
+                        title=f"Benford's Law Analysis - Risk Level: {benford_data.get('risk_level', 'Unknown')}",
+                        xaxis_title="First Digit",
+                        yaxis_title="Frequency"
+                    )
+                    figures.append(fig2)
+        
+        except Exception as e:
+            print(f"Visualization creation failed: {str(e)}")
         
         return figures
 
@@ -328,6 +341,7 @@ def load_data_node(state: AnalysisState) -> AnalysisState:
         
     except Exception as e:
         state['error_messages'].append(f"Data loading failed: {str(e)}")
+        print(f"❌ Data loading failed: {str(e)}")
         
     return state
 
@@ -336,6 +350,10 @@ def analyze_data_node(state: AnalysisState) -> AnalysisState:
     try:
         df = state['data']
         analysis_type = state['analysis_type']
+        
+        if df.empty:
+            state['error_messages'].append("No data available for analysis")
+            return state
         
         # Initialize audit analyzer
         analyzer = AuditAnalyzer()
@@ -364,24 +382,37 @@ def analyze_data_node(state: AnalysisState) -> AnalysisState:
                 state['results']['gap_analysis'] = gap_results
         
         # Statistical analysis
-        state['results']['statistical_summary'] = df.describe().to_dict()
+        try:
+            state['results']['statistical_summary'] = df.describe().to_dict()
+        except Exception as e:
+            print(f"Statistical analysis failed: {str(e)}")
         
         print("✅ Data analysis completed")
         
     except Exception as e:
         state['error_messages'].append(f"Data analysis failed: {str(e)}")
+        print(f"❌ Data analysis failed: {str(e)}")
         
     return state
 
 def llm_query_node(state: AnalysisState) -> AnalysisState:
     """Node 3: Process natural language queries with LLM"""
     try:
+        # Check if OpenAI API key is available
+        if not os.getenv('OPENAI_API_KEY'):
+            state['error_messages'].append("OpenAI API key not found")
+            return state
+            
+        df = state['data']
+        if df.empty:
+            state['error_messages'].append("No data available for LLM query")
+            return state
+            
         # Initialize LLM
         model = 'gpt-4o-mini'
         llm = ChatOpenAI(model_name=model, temperature=0)
         
         # Create pandas agent
-        df = state['data']
         query = state['query']
         
         # Enhanced suffix for audit context
@@ -417,6 +448,7 @@ def llm_query_node(state: AnalysisState) -> AnalysisState:
         
     except Exception as e:
         state['error_messages'].append(f"LLM query failed: {str(e)}")
+        print(f"❌ LLM query failed: {str(e)}")
         
     return state
 
@@ -485,6 +517,7 @@ def risk_assessment_node(state: AnalysisState) -> AnalysisState:
         
     except Exception as e:
         state['error_messages'].append(f"Risk assessment failed: {str(e)}")
+        print(f"❌ Risk assessment failed: {str(e)}")
         
     return state
 
@@ -493,6 +526,10 @@ def generate_visualizations_node(state: AnalysisState) -> AnalysisState:
     try:
         df = state['data']
         results = state['results']
+        
+        if df.empty:
+            state['error_messages'].append("No data available for visualization")
+            return state
         
         viz_engine = VisualizationEngine()
         figures = viz_engine.create_audit_dashboard(df, results)
@@ -509,6 +546,7 @@ def generate_visualizations_node(state: AnalysisState) -> AnalysisState:
         
     except Exception as e:
         state['error_messages'].append(f"Visualization generation failed: {str(e)}")
+        print(f"❌ Visualization generation failed: {str(e)}")
         
     return state
 
@@ -525,13 +563,13 @@ def generate_recommendations_node(state: AnalysisState) -> AnalysisState:
             recommendations.append(finding['recommendation'])
         
         # Add general recommendations based on overall risk
-        if risk_assessment['overall_risk'] == 'HIGH':
+        if risk_assessment.get('overall_risk') == 'HIGH':
             recommendations.extend([
                 'Implement immediate corrective actions for high-risk findings',
                 'Establish enhanced monitoring controls',
                 'Consider expanding audit scope for related areas'
             ])
-        elif risk_assessment['overall_risk'] == 'MEDIUM':
+        elif risk_assessment.get('overall_risk') == 'MEDIUM':
             recommendations.extend([
                 'Develop remediation plan with timelines',
                 'Implement regular monitoring procedures'
@@ -550,6 +588,7 @@ def generate_recommendations_node(state: AnalysisState) -> AnalysisState:
         
     except Exception as e:
         state['error_messages'].append(f"Recommendation generation failed: {str(e)}")
+        print(f"❌ Recommendation generation failed: {str(e)}")
         
     return state
 
@@ -621,13 +660,13 @@ class AuditDataAnalysisAgent:
         workflow.add_node("generate_recommendations", generate_recommendations_node)
         
         # Define the flow
-        workflow.set_entry_point("load_data")
+        workflow.add_edge("__start__", "load_data")
         workflow.add_edge("load_data", "analyze_data")
         workflow.add_edge("analyze_data", "llm_query")
         workflow.add_edge("llm_query", "risk_assessment")
         workflow.add_edge("risk_assessment", "generate_visualizations")
         workflow.add_edge("generate_visualizations", "generate_recommendations")
-        workflow.add_edge("generate_recommendations", END)
+        workflow.add_edge("generate_recommendations", "__end__")
         
         return workflow.compile()
     
@@ -706,7 +745,7 @@ class AuditDataAnalysisAgent:
                 print(f"   {i}. {rec}")
         
         # Query Results
-        if not report['query_results'].empty:
+        if hasattr(report['query_results'], 'empty') and not report['query_results'].empty:
             print(f"\n📊 QUERY RESULTS:")
             print(report['query_results'].to_string(index=False))
         
@@ -717,7 +756,6 @@ class AuditDataAnalysisAgent:
                 print(f"   • {error}")
         
         print("\n" + "="*80)
-
 # ================================
 # EXAMPLE USAGE & DEMO
 # ================================
@@ -727,13 +765,12 @@ if __name__ == "__main__":
     try:
         # Load API key (replace with your method)
         # api_key = yaml.safe_load(open('../credentials.yml'))['openai']
-        api_key = "your-openai-api-key-here"  # Replace with actual key
-        
+        api_key = "your_openai_api_key_here"  # Replace with your actual OpenAI API key
         # Initialize the agent
         audit_agent = AuditDataAnalysisAgent(api_key)
         
         # Example file path (replace with actual Excel file)
-        file_path = "sample_audit_data.xlsx"
+        file_path = "retail_sales_data.xlsx"
         
         # Example queries for audit teams
         audit_queries = [
